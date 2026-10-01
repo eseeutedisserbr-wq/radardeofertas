@@ -59,9 +59,7 @@ async function mlGet(url){const tk=await mlToken(),r=await fetch(url,{headers:tk
 async function mlCatId(nc){
   mlCats=mlCats||await mlGet("https://api.mercadolibre.com/sites/MLB/categories");
   const find=(l,ws)=>l.find(c=>ws.some(w=>norm(c.name).includes(norm(w))));
-  if(nc==="Camisas de Futebol"){const p=find(mlCats,["Esportes e Fitness"]);if(!p)return null;
-    const d=await mlGet("https://api.mercadolibre.com/categories/"+p.id),f=find(d.children_categories||[],["futebol"]);if(!f)return null;
-    const d2=await mlGet("https://api.mercadolibre.com/categories/"+f.id),c=find(d2.children_categories||[],["camisa"]);return (c&&c.id)||f.id}
+  if(nc==="Camisas de Futebol"){const r=await findShirtCat();return r.best?r.best.id:(r.fallback?r.fallback.id:null)}
   if(SPORTSUB[nc]){const p=find(mlCats,["Esportes e Fitness"]);if(!p)return null;const d=await mlGet("https://api.mercadolibre.com/categories/"+p.id);const c=find(d.children_categories||[],SPORTSUB[nc]);return c&&c.id}
   const w=MLCAT[nc],c=w&&find(mlCats,[w]);return c&&c.id}
 async function mlGetAny(url){
@@ -70,6 +68,21 @@ async function mlGetAny(url){
     if(!r.ok)throw new Error(e1.message+" | sem token ("+r.status+")");
     return j}}
 async function pool(a,n,fn){for(let i=0;i<a.length;i+=n)await Promise.all(a.slice(i,i+n).map(fn))}
+let shirtCache=null;
+async function findShirtCat(){
+  if(shirtCache)return shirtCache;
+  mlCats=mlCats||await mlGet("https://api.mercadolibre.com/sites/MLB/categories");
+  const roots=mlCats.filter(c=>/esportes e fitness|calcados, roupas e bolsas/.test(norm(c.name)));
+  const seen=[],q=roots.map(r=>({id:r.id,path:r.name}));let calls=0,best=null,fallback=null;
+  while(q.length&&calls<70){const n=q.shift();let d;
+    try{d=await mlGet("https://api.mercadolibre.com/categories/"+n.id);calls++}catch(e){continue}
+    for(const c of d.children_categories||[]){
+      const path=n.path+" > "+c.name,p=norm(path),nm=norm(c.name);seen.push({id:c.id,path});
+      if(/camisa|camiseta/.test(nm)&&/futebol|time|clube|selecao/.test(p)&&(!best||(/futebol/.test(p)&&!/futebol/.test(norm(best.path)))))best={id:c.id,path};
+      if(!fallback&&/futebol/.test(nm))fallback={id:c.id,path};
+      if(n.path.split(">").length<4)q.push({id:c.id,path})}
+    if(best&&/futebol/.test(norm(best.path)))break}
+  return shirtCache={best,fallback,seen}}
 async function mlHighlights(nc){
   const id=await mlCatId(nc);if(!id)return [];
   const lim=+E.ML_POR_NICHO||30,H="https://api.mercadolibre.com/highlights/MLB/category/";
@@ -99,6 +112,7 @@ async function mlDebug(nc){
   await step("busca",async()=>{const x=await probe("https://api.mercadolibre.com/sites/MLB/search?q=halteres&limit=3",true);return{status:x.status,resultados:(x.j.results||[]).length}});
   let id=null,hc=[];
   await step("categoria",async()=>{id=await mlCatId(nc);return id||"não encontrada"});
+  if(nc==="Camisas de Futebol")await step("arvore_camisa",async()=>{const r=await findShirtCat();return{escolhida:r.best||null,alternativa:r.fallback||null,caminhos:r.seen.slice(0,45).map(x=>x.path)}});
   if(id)await step("destaques",async()=>{const h=await mlGet("https://api.mercadolibre.com/highlights/MLB/category/"+id);hc=h.content||[];return{total:hc.length,itens:hc.filter(x=>x.type==="ITEM").length,produtos:hc.filter(x=>x.type==="PRODUCT").length}});
   const p=hc.find(x=>x.type==="PRODUCT"),it=hc.find(x=>x.type==="ITEM");
   const show=x=>({status:x.status,campos:x.campos,erro:x.erro});
