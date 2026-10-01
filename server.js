@@ -67,27 +67,33 @@ async function mlGetAny(url){
     const r=await fetch(url),j=await r.json().catch(()=>({}));
     if(!r.ok)throw new Error(e1.message+" | sem token ("+r.status+")");
     return j}}
+const nz2=s=>String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
 async function pool(a,n,fn){for(let i=0;i<a.length;i+=n)await Promise.all(a.slice(i,i+n).map(fn))}
 let shirtCache=null;
 async function findShirtCat(){
   if(shirtCache)return shirtCache;
   mlCats=mlCats||await mlGet("https://api.mercadolibre.com/sites/MLB/categories");
-  const roots=mlCats.filter(c=>/esportes e fitness|calcados, roupas e bolsas/.test(norm(c.name)));
-  const seen=[],q=roots.map(r=>({id:r.id,path:r.name}));let calls=0,best=null,fallback=null;
-  while(q.length&&calls<70){const n=q.shift();let d;
-    try{d=await mlGet("https://api.mercadolibre.com/categories/"+n.id);calls++}catch(e){continue}
-    for(const c of d.children_categories||[]){
-      const path=n.path+" > "+c.name,p=norm(path),nm=norm(c.name);seen.push({id:c.id,path});
-      if(/camisa|camiseta/.test(nm)&&/futebol|time|clube|selecao/.test(p)&&(!best||(/futebol/.test(p)&&!/futebol/.test(norm(best.path)))))best={id:c.id,path};
-      if(!fallback&&/futebol/.test(nm))fallback={id:c.id,path};
-      if(n.path.split(">").length<4)q.push({id:c.id,path})}
-    if(best&&/futebol/.test(norm(best.path)))break}
-  return shirtCache={best,fallback,seen}}
+  const kidsOf=async id=>{try{return (await mlGet("https://api.mercadolibre.com/categories/"+id)).children_categories||[]}catch(e){return []}};
+  const rx=/camisa|camiseta|uniforme|torcedor/,seen=[];let best=null,fallback=null;const extras=[];
+  const esp=mlCats.find(c=>/esportes e fitness/.test(norm(c.name)));
+  if(esp){
+    const fut=(await kidsOf(esp.id)).find(c=>/futebol/.test(norm(c.name))&&!/americano/.test(norm(c.name)));
+    if(fut){
+      fallback={id:fut.id,path:"Esportes e Fitness > "+fut.name};
+      const kids=await kidsOf(fut.id);kids.forEach(k=>seen.push({id:k.id,path:fallback.path+" > "+k.name}));
+      let b=kids.find(k=>rx.test(norm(k.name)));if(b)best={id:b.id,path:fallback.path+" > "+b.name};
+      for(const k of kids.slice(0,12)){if(best)break;
+        for(const c of await kidsOf(k.id)){seen.push({id:c.id,path:fallback.path+" > "+k.name+" > "+c.name});if(!best&&rx.test(norm(c.name)))best={id:c.id,path:fallback.path+" > "+k.name+" > "+c.name}}}}}
+  const rou=mlCats.find(c=>/calcados, roupas e bolsas/.test(norm(c.name)));
+  if(rou)for(const c of await kidsOf(rou.id)){if(/^camisas$|camisetas e regatas|^camisetas/.test(norm(c.name))){extras.push({id:c.id,path:"Calçados, Roupas e Bolsas > "+c.name});seen.push({id:c.id,path:"Calçados, Roupas e Bolsas > "+c.name})}}
+  return shirtCache={best,fallback,extras,seen}}
 async function mlHighlights(nc){
   const id=await mlCatId(nc);if(!id)return [];
   const lim=+E.ML_POR_NICHO||30,H="https://api.mercadolibre.com/highlights/MLB/category/";
+  const shirt=nc==="Camisas de Futebol",sr=shirt?await findShirtCat():null;
   let list=((await mlGet(H+id)).content||[]).slice();
-  if(list.length<lim+10){try{
+  if(shirt)for(const e of sr.extras){try{((await mlGet(H+e.id)).content||[]).forEach(x=>{if(!list.some(y=>y.id===x.id))list.push(x)})}catch(er){}}
+  if(list.length<lim+10&&!(shirt&&!sr.best)){try{
     const d=await mlGet("https://api.mercadolibre.com/categories/"+id);
     for(const k of (d.children_categories||[]).slice(0,+E.ML_SUBCATS||8)){
       if(list.length>=lim+10)break;
@@ -101,7 +107,7 @@ async function mlHighlights(nc){
     const p=x.id,pj=await mlGetAny("https://api.mercadolibre.com/products/"+p),b=pj.buy_box_winner||{};let pr=+b.price,old=+b.original_price||0,free=b.shipping&&b.shipping.free_shipping;
     if(!(pr>0)){const ij=await mlGetAny("https://api.mercadolibre.com/products/"+p+"/items?limit=1"),arr=ij.results||ij.items||(Array.isArray(ij)?ij:[]),it=arr[0]||{};pr=+it.price;old=+it.original_price||0;free=it.shipping&&it.shipping.free_shipping}
     if(pr>0)out.push({idx:x.idx,id:"mlp"+p,n:pj.name,pr,old,cm,cd:free?"Frete grátis":"Mercado Livre",lk:aff("https://www.mercadolivre.com.br/p/"+p),img:img(pj.pictures&&pj.pictures[0]&&pj.pictures[0].url)})}catch(e){}});
-  if(nc==="Camisas de Futebol")out=out.filter(x=>/camisa|camiseta|uniforme|jersey/i.test(x.n||""));
+  if(nc==="Camisas de Futebol")out=out.filter(x=>{const t=nz2(x.n||"");return /camisa|camiseta|uniforme|jersey/.test(t)&&/futebol|time|clube|torcedor|oficial|selecao|brasil|flamengo|corinthians|palmeiras|sao paulo|santos|vasco|gremio|internacional|cruzeiro|atletico|botafogo|fluminense|bahia|fortaleza|real madrid|barcelona|manchester|argentina|liverpool|chelsea|psg|portugal|franca/.test(t)});
   out.sort((a,b)=>a.idx-b.idx);
   return out.slice(0,lim).map((x,i)=>{const {idx,...r}=x;return {...r,rank:i+1,sales:Math.max(1,lim+10-idx)*100}})}
 async function mlDebug(nc){
@@ -112,7 +118,7 @@ async function mlDebug(nc){
   await step("busca",async()=>{const x=await probe("https://api.mercadolibre.com/sites/MLB/search?q=halteres&limit=3",true);return{status:x.status,resultados:(x.j.results||[]).length}});
   let id=null,hc=[];
   await step("categoria",async()=>{id=await mlCatId(nc);return id||"não encontrada"});
-  if(nc==="Camisas de Futebol")await step("arvore_camisa",async()=>{const r=await findShirtCat();return{escolhida:r.best||null,alternativa:r.fallback||null,caminhos:r.seen.slice(0,45).map(x=>x.path)}});
+  if(nc==="Camisas de Futebol")await step("arvore_camisa",async()=>{const r=await findShirtCat();return{escolhida:r.best||null,alternativa:r.fallback||null,extras:r.extras,filhos_do_futebol:r.seen.map(x=>x.path).filter(p=>/Futebol/.test(p)).slice(0,40)}});
   if(id)await step("destaques",async()=>{const h=await mlGet("https://api.mercadolibre.com/highlights/MLB/category/"+id);hc=h.content||[];return{total:hc.length,itens:hc.filter(x=>x.type==="ITEM").length,produtos:hc.filter(x=>x.type==="PRODUCT").length}});
   const p=hc.find(x=>x.type==="PRODUCT"),it=hc.find(x=>x.type==="ITEM");
   const show=x=>({status:x.status,campos:x.campos,erro:x.erro});
