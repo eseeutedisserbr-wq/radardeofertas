@@ -55,27 +55,41 @@ async function mlCatId(nc){
   const find=(l,ws)=>l.find(c=>ws.some(w=>norm(c.name).includes(norm(w))));
   if(SPORTSUB[nc]){const p=find(mlCats,["Esportes e Fitness"]);if(!p)return null;const d=await mlGet("https://api.mercadolibre.com/categories/"+p.id);const c=find(d.children_categories||[],SPORTSUB[nc]);return c&&c.id}
   const w=MLCAT[nc],c=w&&find(mlCats,[w]);return c&&c.id}
+async function mlGetAny(url){
+  try{return await mlGet(url)}catch(e1){
+    const r=await fetch(url),j=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(e1.message+" | sem token ("+r.status+")");
+    return j}}
 async function mlHighlights(nc){
   const id=await mlCatId(nc);if(!id)return [];
   const h=await mlGet("https://api.mercadolibre.com/highlights/MLB/category/"+id),c=h.content||[],out=[];
-  const items=c.filter(x=>x.type==="ITEM").slice(0,8).map(x=>x.id),prods=c.filter(x=>x.type==="PRODUCT").slice(0,6).map(x=>x.id);
+  const items=c.filter(x=>x.type==="ITEM").slice(0,8).map(x=>x.id),prods=c.filter(x=>x.type==="PRODUCT").slice(0,8).map(x=>x.id);
   const aff=u=>u+(u.includes("?")?"&":"?")+E.ML_AFFILIATE_PARAMS,cm=+E.ML_COMMISSION||8;
-  if(items.length){
-    const arr=await mlGet("https://api.mercadolibre.com/items?ids="+items.join(",")+"&attributes=id,title,price,original_price,thumbnail,permalink,sold_quantity,shipping");
-    arr.filter(a=>a.code===200).forEach(a=>{const n=a.body;out.push({id:"ml"+n.id,n:n.title,pr:n.price,old:n.original_price||0,cm,cd:n.shipping&&n.shipping.free_shipping?"Frete grátis":"Mercado Livre",lk:aff(n.permalink),img:(n.thumbnail||"").replace("http:","https:"),sales:n.sold_quantity||0})})}
-  if(out.length<5&&prods.length){
-    const ps=await Promise.all(prods.map(p=>mlGet("https://api.mercadolibre.com/products/"+p).catch(()=>null)));
-    ps.filter(Boolean).forEach(p=>{const b=p.buy_box_winner||{},pr=+b.price;if(pr>0)out.push({id:"mlp"+p.id,n:p.name,pr,old:+b.original_price||0,cm,cd:b.shipping&&b.shipping.free_shipping?"Frete grátis":"Mercado Livre",lk:aff("https://www.mercadolivre.com.br/p/"+p.id),img:((p.pictures&&p.pictures[0]&&p.pictures[0].url)||"").replace("http:","https:"),sales:0})})}
+  const img=u=>String(u||"").replace("http:","https:");
+  for(const i of items){try{const n=await mlGetAny("https://api.mercadolibre.com/items/"+i);out.push({id:"ml"+n.id,n:n.title,pr:n.price,old:n.original_price||0,cm,cd:n.shipping&&n.shipping.free_shipping?"Frete grátis":"Mercado Livre",lk:aff(n.permalink),img:img(n.thumbnail),sales:n.sold_quantity||0})}catch(e){}}
+  await Promise.all(prods.map(async p=>{if(out.length>=8)return;try{
+    const pj=await mlGetAny("https://api.mercadolibre.com/products/"+p),b=pj.buy_box_winner||{};let pr=+b.price,old=+b.original_price||0,free=b.shipping&&b.shipping.free_shipping;
+    if(!(pr>0)){const ij=await mlGetAny("https://api.mercadolibre.com/products/"+p+"/items?limit=1"),arr=ij.results||ij.items||(Array.isArray(ij)?ij:[]),it=arr[0]||{};pr=+it.price;old=+it.original_price||0;free=it.shipping&&it.shipping.free_shipping}
+    if(pr>0)out.push({id:"mlp"+p,n:pj.name,pr,old,cm,cd:free?"Frete grátis":"Mercado Livre",lk:aff("https://www.mercadolivre.com.br/p/"+p),img:img(pj.pictures&&pj.pictures[0]&&pj.pictures[0].url),sales:0})}catch(e){}}));
   return out.slice(0,5)}
 async function mlDebug(nc){
   const d={niche:nc,tem_id_e_secret:!!(E.ML_CLIENT_ID&&E.ML_CLIENT_SECRET),tem_parametros_afiliado:!!E.ML_AFFILIATE_PARAMS};
-  const step=async(k,fn)=>{try{d[k]=await fn()}catch(e){d[k]="ERRO "+String(e.message).slice(0,170)}};
+  const step=async(k,fn)=>{try{d[k]=await fn()}catch(e){d[k]="ERRO "+String(e.message).slice(0,200)}};
+  const probe=async(url,tok)=>{const t=tok?await mlToken():"",r=await fetch(url,{headers:t?{Authorization:"Bearer "+t}:{}}),j=await r.json().catch(()=>({}));return{status:r.status,campos:Object.keys(j).slice(0,12),erro:r.ok?undefined:JSON.stringify(j).slice(0,100),j}};
   await step("token_ok",async()=>!!(await mlToken()));
-  await step("busca",async()=>{const tk=await mlToken(),r=await fetch("https://api.mercadolibre.com/sites/MLB/search?q=halteres&limit=3",{headers:tk?{Authorization:"Bearer "+tk}:{}}),j=await r.json().catch(()=>({}));return{status:r.status,resultados:(j.results||[]).length}});
-  let id=null;
+  await step("busca",async()=>{const x=await probe("https://api.mercadolibre.com/sites/MLB/search?q=halteres&limit=3",true);return{status:x.status,resultados:(x.j.results||[]).length}});
+  let id=null,hc=[];
   await step("categoria",async()=>{id=await mlCatId(nc);return id||"não encontrada"});
-  d.categorias_exemplo=(mlCats||[]).slice(0,12).map(c=>c.name);
-  if(id)await step("destaques",async()=>{const h=await mlGet("https://api.mercadolibre.com/highlights/MLB/category/"+id),c=h.content||[];return{total:c.length,itens:c.filter(x=>x.type==="ITEM").length,produtos:c.filter(x=>x.type==="PRODUCT").length}});
+  if(id)await step("destaques",async()=>{const h=await mlGet("https://api.mercadolibre.com/highlights/MLB/category/"+id);hc=h.content||[];return{total:hc.length,itens:hc.filter(x=>x.type==="ITEM").length,produtos:hc.filter(x=>x.type==="PRODUCT").length}});
+  const p=hc.find(x=>x.type==="PRODUCT"),it=hc.find(x=>x.type==="ITEM");
+  const show=x=>({status:x.status,campos:x.campos,erro:x.erro});
+  if(p){
+    await step("produto_com_token",async()=>{const x=await probe("https://api.mercadolibre.com/products/"+p.id,true);return{...show(x),preco_vencedor:x.j.buy_box_winner&&x.j.buy_box_winner.price,tem_nome:!!x.j.name}});
+    await step("produto_sem_token",async()=>show(await probe("https://api.mercadolibre.com/products/"+p.id,false)));
+    await step("itens_do_produto",async()=>{const x=await probe("https://api.mercadolibre.com/products/"+p.id+"/items?limit=1",true);return show(x)})}
+  if(it){
+    await step("item_com_token",async()=>show(await probe("https://api.mercadolibre.com/items/"+it.id,true)));
+    await step("item_sem_token",async()=>show(await probe("https://api.mercadolibre.com/items/"+it.id,false)))}
   if(id)await step("lista_final",async()=>(await mlHighlights(nc)).length);
   return d}
 async function ml(nc,kw){
