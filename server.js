@@ -45,6 +45,12 @@ async function mlToken(){
   const j=await r.json();if(!j.access_token)throw new Error("token Mercado Livre: "+JSON.stringify(j).slice(0,150));
   mlTok={t:j.access_token,exp:Date.now()+(j.expires_in||21600)*1000-60000};return mlTok.t;
 }
+let COM={};try{COM=JSON.parse(E.ML_COMISSOES||"{}")}catch(e){}
+// Tabela do Programa de Afiliados do Mercado Livre (venda direta, afiliados generalistas).
+// Para sobrescrever algum nicho, use no Render a variável ML_COMISSOES, ex.: {"Beleza":18}
+const MLPCT={"Culinária":5,"Esportes":16,"Audiovisual":5,"Casa & Decoração":12,"Eletrônicos":5,"Moda":16,"Beleza":16,"Saúde":12,
+  "Futebol":16,"Musculação":16,"Corrida":16,"Ciclismo":16,"Fitness & Yoga":16,"Suplementos":16,"Roupas esportivas":16,"Acessórios":16};
+const cmOf=nc=>+COM[nc]||MLPCT[nc]||+E.ML_COMMISSION||12;
 const MLCAT={"Culinária":"Eletrodomésticos","Esportes":"Esportes e Fitness","Audiovisual":"Eletrônicos, Áudio e Vídeo","Casa & Decoração":"Casa, Móveis e Decoração","Eletrônicos":"Celulares e Telefones","Moda":"Calçados, Roupas e Bolsas","Beleza":"Beleza e Cuidado Pessoal","Saúde":"Saúde"};
 const SPORTSUB={"Futebol":["futebol"],"Musculação":["musculacao","fitness"],"Corrida":["corrida","running"],"Ciclismo":["ciclismo"],"Fitness & Yoga":["yoga","pilates","fitness"],"Suplementos":["suplement"],"Roupas esportivas":["roupa","vestuario"],"Acessórios":["acessor"]};
 const norm=s=>String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
@@ -64,7 +70,7 @@ async function mlHighlights(nc){
   const id=await mlCatId(nc);if(!id)return [];
   const h=await mlGet("https://api.mercadolibre.com/highlights/MLB/category/"+id),c=h.content||[],out=[];
   const items=c.filter(x=>x.type==="ITEM").slice(0,8).map(x=>x.id),prods=c.filter(x=>x.type==="PRODUCT").slice(0,8).map(x=>x.id);
-  const aff=u=>u+(u.includes("?")?"&":"?")+E.ML_AFFILIATE_PARAMS,cm=+E.ML_COMMISSION||8;
+  const aff=u=>u+(u.includes("?")?"&":"?")+E.ML_AFFILIATE_PARAMS,cm=cmOf(nc);
   const img=u=>String(u||"").replace("http:","https:");
   for(const i of items){try{const n=await mlGetAny("https://api.mercadolibre.com/items/"+i);out.push({id:"ml"+n.id,n:n.title,pr:n.price,old:n.original_price||0,cm,cd:n.shipping&&n.shipping.free_shipping?"Frete grátis":"Mercado Livre",lk:aff(n.permalink),img:img(n.thumbnail),sales:n.sold_quantity||0})}catch(e){}}
   await Promise.all(prods.map(async p=>{if(out.length>=8)return;try{
@@ -98,7 +104,7 @@ async function ml(nc,kw){
   const j=await r.json();if(!j.results){
     try{const hl=await mlHighlights(nc);if(hl.length)return hl}catch(e){throw new Error("busca ("+r.status+")"+(tk?"":" sem token")+" | mais vendidos: "+e.message.slice(0,110))}
     return []}
-  return j.results.sort((a,b)=>(b.sold_quantity||0)-(a.sold_quantity||0)).slice(0,5).map(n=>({id:"ml"+n.id,n:n.title,pr:n.price,old:n.original_price||0,cm:+E.ML_COMMISSION||8,cd:n.shipping?.free_shipping?"Frete grátis":"Mercado Livre",
+  return j.results.sort((a,b)=>(b.sold_quantity||0)-(a.sold_quantity||0)).slice(0,5).map(n=>({id:"ml"+n.id,n:n.title,pr:n.price,old:n.original_price||0,cm:cmOf(nc),cd:n.shipping?.free_shipping?"Frete grátis":"Mercado Livre",
     lk:n.permalink+(n.permalink.includes("?")?"&":"?")+E.ML_AFFILIATE_PARAMS,img:(n.thumbnail||"").replace("http:","https:"),sales:n.sold_quantity||0}));
 }
 
