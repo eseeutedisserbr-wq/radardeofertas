@@ -66,18 +66,27 @@ async function mlGetAny(url){
     const r=await fetch(url),j=await r.json().catch(()=>({}));
     if(!r.ok)throw new Error(e1.message+" | sem token ("+r.status+")");
     return j}}
+async function pool(a,n,fn){for(let i=0;i<a.length;i+=n)await Promise.all(a.slice(i,i+n).map(fn))}
 async function mlHighlights(nc){
   const id=await mlCatId(nc);if(!id)return [];
-  const h=await mlGet("https://api.mercadolibre.com/highlights/MLB/category/"+id),c=h.content||[],out=[];
-  const items=c.filter(x=>x.type==="ITEM").slice(0,8).map(x=>x.id),prods=c.filter(x=>x.type==="PRODUCT").slice(0,8).map(x=>x.id);
-  const aff=u=>u+(u.includes("?")?"&":"?")+E.ML_AFFILIATE_PARAMS,cm=cmOf(nc);
+  const lim=+E.ML_POR_NICHO||30,H="https://api.mercadolibre.com/highlights/MLB/category/";
+  let list=((await mlGet(H+id)).content||[]).slice();
+  if(list.length<lim+10){try{
+    const d=await mlGet("https://api.mercadolibre.com/categories/"+id);
+    for(const k of (d.children_categories||[]).slice(0,+E.ML_SUBCATS||8)){
+      if(list.length>=lim+10)break;
+      try{const hk=(await mlGet(H+k.id)).content||[];hk.forEach(x=>{if(!list.some(y=>y.id===x.id))list.push(x)})}catch(e){}}
+  }catch(e){}}
+  const cand=list.slice(0,lim+10).map((x,i)=>({...x,idx:i})),out=[];
+  const aff=u=>u+(u.includes("?")?"&":"?")+E.ML_AFFILIATE_PARAMS,cm=+E.ML_COMMISSION||8;
   const img=u=>String(u||"").replace("http:","https:");
-  for(const i of items){try{const n=await mlGetAny("https://api.mercadolibre.com/items/"+i);out.push({id:"ml"+n.id,n:n.title,pr:n.price,old:n.original_price||0,cm,cd:n.shipping&&n.shipping.free_shipping?"Frete grátis":"Mercado Livre",lk:aff(n.permalink),img:img(n.thumbnail),sales:n.sold_quantity||0})}catch(e){}}
-  await Promise.all(prods.map(async p=>{if(out.length>=8)return;try{
-    const pj=await mlGetAny("https://api.mercadolibre.com/products/"+p),b=pj.buy_box_winner||{};let pr=+b.price,old=+b.original_price||0,free=b.shipping&&b.shipping.free_shipping;
+  await pool(cand,5,async x=>{try{
+    if(x.type==="ITEM"){const n=await mlGetAny("https://api.mercadolibre.com/items/"+x.id);if(n.price>0)out.push({idx:x.idx,id:"ml"+n.id,n:n.title,pr:n.price,old:n.original_price||0,cm,cd:n.shipping&&n.shipping.free_shipping?"Frete grátis":"Mercado Livre",lk:aff(n.permalink),img:img(n.thumbnail)});return}
+    const p=x.id,pj=await mlGetAny("https://api.mercadolibre.com/products/"+p),b=pj.buy_box_winner||{};let pr=+b.price,old=+b.original_price||0,free=b.shipping&&b.shipping.free_shipping;
     if(!(pr>0)){const ij=await mlGetAny("https://api.mercadolibre.com/products/"+p+"/items?limit=1"),arr=ij.results||ij.items||(Array.isArray(ij)?ij:[]),it=arr[0]||{};pr=+it.price;old=+it.original_price||0;free=it.shipping&&it.shipping.free_shipping}
-    if(pr>0)out.push({id:"mlp"+p,n:pj.name,pr,old,cm,cd:free?"Frete grátis":"Mercado Livre",lk:aff("https://www.mercadolivre.com.br/p/"+p),img:img(pj.pictures&&pj.pictures[0]&&pj.pictures[0].url),sales:0})}catch(e){}}));
-  return out.slice(0,5)}
+    if(pr>0)out.push({idx:x.idx,id:"mlp"+p,n:pj.name,pr,old,cm,cd:free?"Frete grátis":"Mercado Livre",lk:aff("https://www.mercadolivre.com.br/p/"+p),img:img(pj.pictures&&pj.pictures[0]&&pj.pictures[0].url)})}catch(e){}});
+  out.sort((a,b)=>a.idx-b.idx);
+  return out.slice(0,lim).map((x,i)=>{const {idx,...r}=x;return {...r,rank:i+1,sales:Math.max(1,lim+10-idx)*100}})}
 async function mlDebug(nc){
   const d={niche:nc,tem_id_e_secret:!!(E.ML_CLIENT_ID&&E.ML_CLIENT_SECRET),tem_parametros_afiliado:!!E.ML_AFFILIATE_PARAMS};
   const step=async(k,fn)=>{try{d[k]=await fn()}catch(e){d[k]="ERRO "+String(e.message).slice(0,200)}};
@@ -129,15 +138,15 @@ async function refresh(modo){
   }
   items.sort((a,b)=>score(b)-score(a));cache[modo]={t:Date.now(),items,status};console.log(new Date().toLocaleTimeString(),modo,status);
 }
-const ensure=m=>{const c=cache[m];return !c||Date.now()-c.t>TTL?(busy[m]=busy[m]||refresh(m).finally(()=>busy[m]=null)):busy[m]};
+const ensure=m=>{const c=cache[m];return !c||Date.now()-c.t>TTL?(busy[m]=busy[m]||refresh(m).catch(()=>{}).finally(()=>busy[m]=null)):busy[m]};
 
 http.createServer(async(q,s)=>{
   const u=new URL(q.url,"http://x");
   if(u.pathname==="/api/debug-ml"){const d=await mlDebug(u.searchParams.get("nc")||"Esportes");s.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});return s.end(JSON.stringify(d,null,1))}
   if(u.pathname==="/api/products"||u.pathname==="/api/status"){
-    const m=u.searchParams.get("modo")==="esportes"?"esportes":"geral";await ensure(m);const cc=cache[m]||{status:{},t:0,items:[]};s.writeHead(200,{"Content-Type":"application/json","Access-Control-Allow-Origin":"*"});
+    const m=u.searchParams.get("modo")==="esportes"?"esportes":"geral";const pr=ensure(m);if(!cache[m])await pr;const cc=cache[m]||{status:{},t:0,items:[]};s.writeHead(200,{"Content-Type":"application/json","Access-Control-Allow-Origin":"*"});
     const b={status:cc.status,at:cc.t};if(u.pathname==="/api/products")b.items=cc.items;return s.end(JSON.stringify(b))}
   const nm=u.pathname==="/"?"index.html":u.pathname.slice(1);
   if(!["index.html","esportes.html"].includes(nm)){s.writeHead(404);return s.end("404")}
   fs.readFile(path.join(__dirname,nm),(e,d)=>{if(e){s.writeHead(404);return s.end("404")}s.writeHead(200,{"Content-Type":"text/html; charset=utf-8"});s.end(d)});
-}).listen(PORT,()=>console.log("Radar de Ofertas em http://localhost:"+PORT));
+}).listen(PORT,()=>{console.log("Radar de Ofertas em http://localhost:"+PORT);ensure("geral");ensure("esportes")});
