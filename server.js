@@ -3,9 +3,9 @@ const http=require("http"),fs=require("fs"),path=require("path"),crypto=require(
 try{fs.readFileSync(path.join(__dirname,".env"),"utf8").split("\n").forEach(l=>{const m=l.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);if(m&&!process.env[m[1]])process.env[m[1]]=m[2].replace(/^["']|["']$/g,"")})}catch{}
 const E=process.env,PORT=E.PORT||3000,TTL=(+E.CACHE_MIN||15)*60000;
 const SETS={
- geral:{"Culinária":"air fryer","Esportes":"halteres","Audiovisual":"ring light","Casa & Decoração":"luminária led","Eletrônicos":"suporte celular","Moda":"mochila","Beleza":"skincare","Saúde":"massageador"},
- esportes:{"Futebol":"chuteira","Musculação":"halteres","Corrida":"tênis de corrida","Ciclismo":"capacete ciclismo","Fitness & Yoga":"tapete de yoga","Suplementos":"whey protein","Roupas esportivas":"camiseta dry fit","Acessórios":"garrafa térmica"}};
-const EMO={"Culinária":"🍳","Esportes":"⚽","Audiovisual":"🎬","Casa & Decoração":"🏠","Eletrônicos":"📱","Moda":"👗","Beleza":"💄","Saúde":"💊","Futebol":"⚽","Musculação":"🏋️","Corrida":"🏃","Ciclismo":"🚴","Fitness & Yoga":"🧘","Suplementos":"💪","Roupas esportivas":"👕","Acessórios":"🎧"};
+ geral:{"Camisas de Futebol":"camisa de futebol","Culinária":"air fryer","Esportes":"halteres","Audiovisual":"ring light","Casa & Decoração":"luminária led","Eletrônicos":"suporte celular","Moda":"mochila","Beleza":"skincare","Saúde":"massageador"},
+ esportes:{"Futebol":"chuteira","Camisas de Futebol":"camisa de futebol","Musculação":"halteres","Corrida":"tênis de corrida","Ciclismo":"capacete ciclismo","Fitness & Yoga":"tapete de yoga","Suplementos":"whey protein","Roupas esportivas":"camiseta dry fit","Acessórios":"garrafa térmica"}};
+const EMO={"Camisas de Futebol":"👕","Culinária":"🍳","Esportes":"⚽","Audiovisual":"🎬","Casa & Decoração":"🏠","Eletrônicos":"📱","Moda":"👗","Beleza":"💄","Saúde":"💊","Futebol":"⚽","Musculação":"🏋️","Corrida":"🏃","Ciclismo":"🚴","Fitness & Yoga":"🧘","Suplementos":"💪","Roupas esportivas":"👕","Acessórios":"🎧"};
 
 // ---------- SHOPEE (API oficial de afiliados, GraphQL + assinatura SHA256) ----------
 async function shopee(nc,kw){
@@ -59,6 +59,9 @@ async function mlGet(url){const tk=await mlToken(),r=await fetch(url,{headers:tk
 async function mlCatId(nc){
   mlCats=mlCats||await mlGet("https://api.mercadolibre.com/sites/MLB/categories");
   const find=(l,ws)=>l.find(c=>ws.some(w=>norm(c.name).includes(norm(w))));
+  if(nc==="Camisas de Futebol"){const p=find(mlCats,["Esportes e Fitness"]);if(!p)return null;
+    const d=await mlGet("https://api.mercadolibre.com/categories/"+p.id),f=find(d.children_categories||[],["futebol"]);if(!f)return null;
+    const d2=await mlGet("https://api.mercadolibre.com/categories/"+f.id),c=find(d2.children_categories||[],["camisa"]);return (c&&c.id)||f.id}
   if(SPORTSUB[nc]){const p=find(mlCats,["Esportes e Fitness"]);if(!p)return null;const d=await mlGet("https://api.mercadolibre.com/categories/"+p.id);const c=find(d.children_categories||[],SPORTSUB[nc]);return c&&c.id}
   const w=MLCAT[nc],c=w&&find(mlCats,[w]);return c&&c.id}
 async function mlGetAny(url){
@@ -77,7 +80,7 @@ async function mlHighlights(nc){
       if(list.length>=lim+10)break;
       try{const hk=(await mlGet(H+k.id)).content||[];hk.forEach(x=>{if(!list.some(y=>y.id===x.id))list.push(x)})}catch(e){}}
   }catch(e){}}
-  const cand=list.slice(0,lim+10).map((x,i)=>({...x,idx:i})),out=[];
+  let out=[];const cand=list.slice(0,lim+10).map((x,i)=>({...x,idx:i}));
   const aff=u=>u+(u.includes("?")?"&":"?")+E.ML_AFFILIATE_PARAMS,cm=+E.ML_COMMISSION||8;
   const img=u=>String(u||"").replace("http:","https:");
   await pool(cand,5,async x=>{try{
@@ -85,6 +88,7 @@ async function mlHighlights(nc){
     const p=x.id,pj=await mlGetAny("https://api.mercadolibre.com/products/"+p),b=pj.buy_box_winner||{};let pr=+b.price,old=+b.original_price||0,free=b.shipping&&b.shipping.free_shipping;
     if(!(pr>0)){const ij=await mlGetAny("https://api.mercadolibre.com/products/"+p+"/items?limit=1"),arr=ij.results||ij.items||(Array.isArray(ij)?ij:[]),it=arr[0]||{};pr=+it.price;old=+it.original_price||0;free=it.shipping&&it.shipping.free_shipping}
     if(pr>0)out.push({idx:x.idx,id:"mlp"+p,n:pj.name,pr,old,cm,cd:free?"Frete grátis":"Mercado Livre",lk:aff("https://www.mercadolivre.com.br/p/"+p),img:img(pj.pictures&&pj.pictures[0]&&pj.pictures[0].url)})}catch(e){}});
+  if(nc==="Camisas de Futebol")out=out.filter(x=>/camisa|camiseta|uniforme|jersey/i.test(x.n||""));
   out.sort((a,b)=>a.idx-b.idx);
   return out.slice(0,lim).map((x,i)=>{const {idx,...r}=x;return {...r,rank:i+1,sales:Math.max(1,lim+10-idx)*100}})}
 async function mlDebug(nc){
