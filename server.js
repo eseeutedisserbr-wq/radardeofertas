@@ -43,7 +43,7 @@ async function mlToken(){
   if(Date.now()<mlTok.exp)return mlTok.t;
   const r=await fetch("https://api.mercadolibre.com/oauth/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded",Accept:"application/json"},body:new URLSearchParams({grant_type:"client_credentials",client_id:E.ML_CLIENT_ID,client_secret:E.ML_CLIENT_SECRET})});
   const j=await r.json();if(!j.access_token)throw new Error("token Mercado Livre: "+JSON.stringify(j).slice(0,150));
-  mlTok={t:j.access_token,exp:Date.now()+(j.expires_in||21600)*1000-60000};return mlTok.t;
+  mlTok={t:j.access_token,exp:Date.now()+Math.min((j.expires_in||21600)*1000-60000,25*60000)};return mlTok.t;
 }
 let COM={};try{COM=JSON.parse(E.ML_COMISSOES||"{}")}catch(e){}
 // Tabela do Programa de Afiliados do Mercado Livre (venda direta, afiliados generalistas).
@@ -104,9 +104,9 @@ async function mlHighlights(nc){
   const img=u=>String(u||"").replace("http:","https:");
   await pool(cand,5,async x=>{try{
     if(x.type==="ITEM"){const n=await mlGetAny("https://api.mercadolibre.com/items/"+x.id);if(n.price>0)out.push({idx:x.idx,id:"ml"+n.id,n:n.title,pr:n.price,old:n.original_price||0,cm,cd:n.shipping&&n.shipping.free_shipping?"Frete grátis":"Mercado Livre",lk:aff(n.permalink),img:img(n.thumbnail)});return}
-    const p=x.id,pj=await mlGetAny("https://api.mercadolibre.com/products/"+p),b=pj.buy_box_winner||{};let pr=+b.price,old=+b.original_price||0,free=b.shipping&&b.shipping.free_shipping;
+    const p=x.id,pj=await mlGetAny("https://api.mercadolibre.com/products/"+p).catch(()=>mlGetAny("https://api.mercadolibre.com/user-products/"+p)),b=pj.buy_box_winner||{};let pr=+b.price,old=+b.original_price||0,free=b.shipping&&b.shipping.free_shipping;
     if(!(pr>0)){const ij=await mlGetAny("https://api.mercadolibre.com/products/"+p+"/items?limit=1"),arr=ij.results||ij.items||(Array.isArray(ij)?ij:[]),it=arr[0]||{};pr=+it.price;old=+it.original_price||0;free=it.shipping&&it.shipping.free_shipping}
-    if(pr>0)out.push({idx:x.idx,id:"mlp"+p,n:pj.name,pr,old,cm,cd:free?"Frete grátis":"Mercado Livre",lk:aff("https://www.mercadolivre.com.br/p/"+p),img:img(pj.pictures&&pj.pictures[0]&&pj.pictures[0].url)})}catch(e){}});
+    if(pr>0)out.push({idx:x.idx,id:"mlp"+p,n:pj.name,pr,old,cm,cd:free?"Frete grátis":"Mercado Livre",lk:aff(pj.permalink||"https://www.mercadolivre.com.br/p/"+p),img:img(pj.pictures&&pj.pictures[0]&&pj.pictures[0].url)})}catch(e){}});
   if(nc==="Camisas de Futebol")out=out.filter(x=>{const t=nz2(x.n||"");return /camisa|camiseta|uniforme|jersey/.test(t)&&/futebol|time|clube|torcedor|oficial|selecao|brasil|flamengo|corinthians|palmeiras|sao paulo|santos|vasco|gremio|internacional|cruzeiro|atletico|botafogo|fluminense|bahia|fortaleza|real madrid|barcelona|manchester|argentina|liverpool|chelsea|psg|portugal|franca/.test(t)});
   out.sort((a,b)=>a.idx-b.idx);
   return out.slice(0,lim).map((x,i)=>{const {idx,...r}=x;return {...r,rank:i+1,sales:Math.max(1,lim+10-idx)*100}})}
@@ -119,8 +119,8 @@ async function mlDebug(nc){
   let id=null,hc=[];
   await step("categoria",async()=>{id=await mlCatId(nc);return id||"não encontrada"});
   if(nc==="Camisas de Futebol")await step("arvore_camisa",async()=>{const r=await findShirtCat();return{escolhida:r.best||null,alternativa:r.fallback||null,extras:r.extras,filhos_do_futebol:r.seen.map(x=>x.path).filter(p=>/Futebol/.test(p)).slice(0,40)}});
-  if(id)await step("destaques",async()=>{const h=await mlGet("https://api.mercadolibre.com/highlights/MLB/category/"+id);hc=h.content||[];return{total:hc.length,itens:hc.filter(x=>x.type==="ITEM").length,produtos:hc.filter(x=>x.type==="PRODUCT").length}});
-  const p=hc.find(x=>x.type==="PRODUCT"),it=hc.find(x=>x.type==="ITEM");
+  if(id)await step("destaques",async()=>{const h=await mlGet("https://api.mercadolibre.com/highlights/MLB/category/"+id);hc=h.content||[];const tp={};hc.forEach(x=>tp[x.type]=(tp[x.type]||0)+1);return{total:hc.length,tipos:tp}});
+  const p=hc.find(x=>x.type!=="ITEM"),it=hc.find(x=>x.type==="ITEM");
   const show=x=>({status:x.status,campos:x.campos,erro:x.erro});
   if(p){
     await step("produto_com_token",async()=>{const x=await probe("https://api.mercadolibre.com/products/"+p.id,true);return{...show(x),preco_vencedor:x.j.buy_box_winner&&x.j.buy_box_winner.price,tem_nome:!!x.j.name}});
