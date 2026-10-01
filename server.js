@@ -45,10 +45,28 @@ async function mlToken(){
   const j=await r.json();if(!j.access_token)throw new Error("token Mercado Livre: "+JSON.stringify(j).slice(0,150));
   mlTok={t:j.access_token,exp:Date.now()+(j.expires_in||21600)*1000-60000};return mlTok.t;
 }
+const MLCAT={"Culinária":"Eletrodomésticos","Esportes":"Esportes e Fitness","Audiovisual":"Eletrônicos, Áudio e Vídeo","Casa & Decoração":"Casa, Móveis e Decoração","Eletrônicos":"Celulares e Telefones","Moda":"Calçados, Roupas e Bolsas","Beleza":"Beleza e Cuidado Pessoal","Saúde":"Saúde"};
+const SPORTSUB={"Futebol":["futebol"],"Musculação":["musculacao","fitness"],"Corrida":["corrida","running"],"Ciclismo":["ciclismo"],"Fitness & Yoga":["yoga","pilates","fitness"],"Suplementos":["suplement"],"Roupas esportivas":["roupa","vestuario"],"Acessórios":["acessor"]};
+const norm=s=>String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+let mlCats=null;
+async function mlGet(url){const tk=await mlToken(),r=await fetch(url,{headers:tk?{Authorization:"Bearer "+tk}:{}}),j=await r.json();if(!r.ok)throw new Error("("+r.status+") "+JSON.stringify(j).slice(0,100));return j}
+async function mlCatId(nc){
+  mlCats=mlCats||await mlGet("https://api.mercadolibre.com/sites/MLB/categories");
+  const find=(l,ws)=>l.find(c=>ws.some(w=>norm(c.name).includes(norm(w))));
+  if(SPORTSUB[nc]){const p=find(mlCats,["Esportes e Fitness"]);if(!p)return null;const d=await mlGet("https://api.mercadolibre.com/categories/"+p.id);const c=find(d.children_categories||[],SPORTSUB[nc]);return c&&c.id}
+  const w=MLCAT[nc],c=w&&find(mlCats,[w]);return c&&c.id}
+async function mlHighlights(nc){
+  const id=await mlCatId(nc);if(!id)return [];
+  const h=await mlGet("https://api.mercadolibre.com/highlights/MLB/category/"+id);
+  const ids=(h.content||[]).filter(x=>x.type==="ITEM").slice(0,8).map(x=>x.id);if(!ids.length)return [];
+  const arr=await mlGet("https://api.mercadolibre.com/items?ids="+ids.join(",")+"&attributes=id,title,price,original_price,thumbnail,permalink,sold_quantity,shipping");
+  return arr.filter(a=>a.code===200).map(a=>a.body).slice(0,5).map(n=>({id:"ml"+n.id,n:n.title,pr:n.price,old:n.original_price||0,cm:+E.ML_COMMISSION||8,cd:n.shipping&&n.shipping.free_shipping?"Frete grátis":"Mercado Livre",lk:n.permalink+(n.permalink.includes("?")?"&":"?")+E.ML_AFFILIATE_PARAMS,img:(n.thumbnail||"").replace("http:","https:"),sales:n.sold_quantity||0}))}
 async function ml(nc,kw){
   const tk=await mlToken(),h=tk?{Authorization:"Bearer "+tk}:{};
   const r=await fetch(`https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(kw)}&limit=10`,{headers:h});
-  const j=await r.json();if(!j.results)throw new Error("Mercado Livre ("+r.status+")"+(tk?"":" sem token: configure ML_CLIENT_ID e ML_CLIENT_SECRET")+" "+JSON.stringify(j).slice(0,120));
+  const j=await r.json();if(!j.results){
+    try{const hl=await mlHighlights(nc);if(hl.length)return hl}catch(e){throw new Error("busca ("+r.status+")"+(tk?"":" sem token")+" | mais vendidos: "+e.message.slice(0,110))}
+    return []}
   return j.results.sort((a,b)=>(b.sold_quantity||0)-(a.sold_quantity||0)).slice(0,5).map(n=>({id:"ml"+n.id,n:n.title,pr:n.price,old:n.original_price||0,cm:+E.ML_COMMISSION||8,cd:n.shipping?.free_shipping?"Frete grátis":"Mercado Livre",
     lk:n.permalink+(n.permalink.includes("?")?"&":"?")+E.ML_AFFILIATE_PARAMS,img:(n.thumbnail||"").replace("http:","https:"),sales:n.sold_quantity||0}));
 }
@@ -69,7 +87,7 @@ async function refresh(modo){
   const N=SETS[modo],items=[],status={},live=Object.values(CONN).some(([,ok])=>ok());
   for(const[pl,[fn,ok]]of Object.entries(CONN)){
     if(!ok()){status[pl]=live?"não configurada":"demonstração (sem credenciais)";if(!live)items.push(...demo(pl,N));continue}
-    try{let n=0;for(const[nc,kw]of Object.entries(N)){const r=await fn(nc,kw);r.forEach(x=>{x.nc=nc;x.pl=pl;x.e=EMO[nc]});items.push(...r);n+=r.length}status[pl]=`ao vivo (${n} produtos)`}
+    try{let n=0;for(const[nc,kw]of Object.entries(N)){const r=await fn(nc,kw);r.forEach(x=>{x.nc=nc;x.pl=pl;x.e=EMO[nc]});items.push(...r);n+=r.length}status[pl]=n?`ao vivo (${n} produtos)`:"conectada, mas sem produtos retornados"}
     catch(e){status[pl]="erro: "+e.message.slice(0,160);if(!live)items.push(...demo(pl,N))}
   }
   items.sort((a,b)=>score(b)-score(a));cache[modo]={t:Date.now(),items,status};console.log(new Date().toLocaleTimeString(),modo,status);
