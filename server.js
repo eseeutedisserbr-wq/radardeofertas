@@ -57,10 +57,27 @@ async function mlCatId(nc){
   const w=MLCAT[nc],c=w&&find(mlCats,[w]);return c&&c.id}
 async function mlHighlights(nc){
   const id=await mlCatId(nc);if(!id)return [];
-  const h=await mlGet("https://api.mercadolibre.com/highlights/MLB/category/"+id);
-  const ids=(h.content||[]).filter(x=>x.type==="ITEM").slice(0,8).map(x=>x.id);if(!ids.length)return [];
-  const arr=await mlGet("https://api.mercadolibre.com/items?ids="+ids.join(",")+"&attributes=id,title,price,original_price,thumbnail,permalink,sold_quantity,shipping");
-  return arr.filter(a=>a.code===200).map(a=>a.body).slice(0,5).map(n=>({id:"ml"+n.id,n:n.title,pr:n.price,old:n.original_price||0,cm:+E.ML_COMMISSION||8,cd:n.shipping&&n.shipping.free_shipping?"Frete grátis":"Mercado Livre",lk:n.permalink+(n.permalink.includes("?")?"&":"?")+E.ML_AFFILIATE_PARAMS,img:(n.thumbnail||"").replace("http:","https:"),sales:n.sold_quantity||0}))}
+  const h=await mlGet("https://api.mercadolibre.com/highlights/MLB/category/"+id),c=h.content||[],out=[];
+  const items=c.filter(x=>x.type==="ITEM").slice(0,8).map(x=>x.id),prods=c.filter(x=>x.type==="PRODUCT").slice(0,6).map(x=>x.id);
+  const aff=u=>u+(u.includes("?")?"&":"?")+E.ML_AFFILIATE_PARAMS,cm=+E.ML_COMMISSION||8;
+  if(items.length){
+    const arr=await mlGet("https://api.mercadolibre.com/items?ids="+items.join(",")+"&attributes=id,title,price,original_price,thumbnail,permalink,sold_quantity,shipping");
+    arr.filter(a=>a.code===200).forEach(a=>{const n=a.body;out.push({id:"ml"+n.id,n:n.title,pr:n.price,old:n.original_price||0,cm,cd:n.shipping&&n.shipping.free_shipping?"Frete grátis":"Mercado Livre",lk:aff(n.permalink),img:(n.thumbnail||"").replace("http:","https:"),sales:n.sold_quantity||0})})}
+  if(out.length<5&&prods.length){
+    const ps=await Promise.all(prods.map(p=>mlGet("https://api.mercadolibre.com/products/"+p).catch(()=>null)));
+    ps.filter(Boolean).forEach(p=>{const b=p.buy_box_winner||{},pr=+b.price;if(pr>0)out.push({id:"mlp"+p.id,n:p.name,pr,old:+b.original_price||0,cm,cd:b.shipping&&b.shipping.free_shipping?"Frete grátis":"Mercado Livre",lk:aff("https://www.mercadolivre.com.br/p/"+p.id),img:((p.pictures&&p.pictures[0]&&p.pictures[0].url)||"").replace("http:","https:"),sales:0})})}
+  return out.slice(0,5)}
+async function mlDebug(nc){
+  const d={niche:nc,tem_id_e_secret:!!(E.ML_CLIENT_ID&&E.ML_CLIENT_SECRET),tem_parametros_afiliado:!!E.ML_AFFILIATE_PARAMS};
+  const step=async(k,fn)=>{try{d[k]=await fn()}catch(e){d[k]="ERRO "+String(e.message).slice(0,170)}};
+  await step("token_ok",async()=>!!(await mlToken()));
+  await step("busca",async()=>{const tk=await mlToken(),r=await fetch("https://api.mercadolibre.com/sites/MLB/search?q=halteres&limit=3",{headers:tk?{Authorization:"Bearer "+tk}:{}}),j=await r.json().catch(()=>({}));return{status:r.status,resultados:(j.results||[]).length}});
+  let id=null;
+  await step("categoria",async()=>{id=await mlCatId(nc);return id||"não encontrada"});
+  d.categorias_exemplo=(mlCats||[]).slice(0,12).map(c=>c.name);
+  if(id)await step("destaques",async()=>{const h=await mlGet("https://api.mercadolibre.com/highlights/MLB/category/"+id),c=h.content||[];return{total:c.length,itens:c.filter(x=>x.type==="ITEM").length,produtos:c.filter(x=>x.type==="PRODUCT").length}});
+  if(id)await step("lista_final",async()=>(await mlHighlights(nc)).length);
+  return d}
 async function ml(nc,kw){
   const tk=await mlToken(),h=tk?{Authorization:"Bearer "+tk}:{};
   const r=await fetch(`https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(kw)}&limit=10`,{headers:h});
@@ -96,6 +113,7 @@ const ensure=m=>{const c=cache[m];return !c||Date.now()-c.t>TTL?(busy[m]=busy[m]
 
 http.createServer(async(q,s)=>{
   const u=new URL(q.url,"http://x");
+  if(u.pathname==="/api/debug-ml"){const d=await mlDebug(u.searchParams.get("nc")||"Esportes");s.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});return s.end(JSON.stringify(d,null,1))}
   if(u.pathname==="/api/products"||u.pathname==="/api/status"){
     const m=u.searchParams.get("modo")==="esportes"?"esportes":"geral";await ensure(m);const cc=cache[m]||{status:{},t:0,items:[]};s.writeHead(200,{"Content-Type":"application/json","Access-Control-Allow-Origin":"*"});
     const b={status:cc.status,at:cc.t};if(u.pathname==="/api/products")b.items=cc.items;return s.end(JSON.stringify(b))}
